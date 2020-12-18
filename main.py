@@ -2,6 +2,9 @@
 import neopixel
 from microbit import *
 
+# Initialization of the I2C interface
+i2c.init(freq=400000, sda=pin20, scl=pin19)
+
 # ==============================================================================
 # LIGHTS
 # ==============================================================================
@@ -34,9 +37,25 @@ def lightsOff():
     np.show()
 
 
+def breaklightsOn():
+    for light in (5, 6):
+        np[light] = (255, 0, 0)
+    np.show()
+
+
+def reverseLightsOn():
+    for light in (5, 6):
+        np[light] = (60, 60, 60)
+    np.show()
+
+
 # ==============================================================================
 # DISPLAY
 # ==============================================================================
+
+def turnOn():
+    display.set_pixel(2, 2, 9)
+
 
 def clockTicking(delay=100):
     display.show(Image.CLOCK12)
@@ -72,8 +91,6 @@ def clockTicking(delay=100):
 # MOTORS
 # ==============================================================================
 
-i2c.init(freq=400000, sda=pin20, scl=pin19)
-
 # Initialisierung des PWM Controllers
 i2c.write(0x70, b'\x00\x01')
 i2c.write(0x70, b'\xE8\xAA')
@@ -83,7 +100,7 @@ i2c.write(0x70, b'\xE8\xAA')
 # PWM0 and PWM1 for the left and PWM2 and PWM3 for the right motor
 def drive(PWM0, PWM1, PWM2, PWM3):
     i2c.write(0x70, b'\x02' + bytes([
-                                        PWM0]))  # Transfer value for PWM channel (0-255) to PWM controller. 0x70 is the I2C address of the controller. b'\x02 is the byte for PWM channel 1. To the byte for the channel the byte with the PWM value is added.
+        PWM0]))  # Transfer value for PWM channel (0-255) to PWM controller. 0x70 is the I2C address of the controller. b'\x02 is the byte for PWM channel 1. To the byte for the channel the byte with the PWM value is added.
     i2c.write(0x70, b'\x03' + bytes([PWM1]))  # Repeat the process for all 4 channels
     i2c.write(0x70, b'\x04' + bytes([PWM2]))
     i2c.write(0x70, b'\x05' + bytes([PWM3]))
@@ -93,33 +110,60 @@ def stop():
     drive(0, 0, 0, 0)
 
 
-def driveBackward(speed=254):
-    drive(speed, 0, speed, 0)
-    sleep(300)
-    stop()
+# ==============================================================================
+# SENSOR DATA
+# ==============================================================================
 
+# Read out IO Expander data and store in sen_data
+def fetchSensorData():
+    try:
+        data = "{0:b}".format(ord(i2c.read(0x38, 1)))
+        bol_data_dict = {}
+        bit_count = 7
+        for i in data:
+            if i == "0":
+                bol_data_dict[bit_count] = False
+                bit_count -= 1
+            else:
+                bol_data_dict[bit_count] = True
+                bit_count -= 1
+        return bol_data_dict  # bit 0 = SpeedLeft, bit 1 = SpeedRight, bit 2 = LineTrackerLeft, bit 3 = LineTrackerMiddle, bit 4 = LineTrackerRight, bit 5 = ObstclLeft, bit 6 = ObstclRight, bit 7 = Buzzer
 
-def driveForward(speed=254):
-    drive(0, speed, 0, speed)
-    sleep(300)
-    stop()
-
-
-def TurnLeft(speed=254):
-    drive(0, speed, speed, 0)
-    sleep(300)
-    stop()
-
-
-def TurnRight(speed=254):
-    drive(speed, 0, 0, speed)
-    sleep(300)
-    stop()
+    except OSError:
+        print('skipping error')
 
 
 # ==============================================================================
 # MAIN LOGIC
 # ==============================================================================
+
+def brake(sensor_data, locked):
+    if not sensor_data[5] or not sensor_data[6]:
+        stop()
+        if locked == False:
+            breaklightsOn()
+    elif locked == False:
+        lightsOn()
+
+
+def driveBackward(speed=254):
+    drive(speed, 0, speed, 0)
+    reverseLightsOn()
+
+
+def driveForward(speed=254):
+    drive(0, speed, 0, speed)
+    lightsOn()
+
+
+def TurnLeft(speed=254):
+    drive(0, speed, speed, 0)
+    lightsOn()
+
+
+def TurnRight(speed=254):
+    drive(speed, 0, 0, speed)
+    lightsOn()
 
 
 def welcome():
@@ -135,19 +179,23 @@ def goodbye():
 
 
 def main():
+    locked = True
     while True:
-        if button_a.is_pressed():
-            welcome()
-            driveForward()
-            sleep(1000)
-            driveBackward()
-            sleep(1000)
-            TurnLeft()
-            sleep(1000)
-            TurnRight()
-        elif button_b.is_pressed():
-            goodbye()
-            # break
+        sensor_data = fetchSensorData()
+        if sensor_data is not None:
+
+            brake(sensor_data, locked)
+
+            if button_a.is_pressed():
+                locked = False
+                welcome()
+                driveForward()
+
+            elif button_b.is_pressed():
+                locked = True
+                stop()
+                goodbye()
+                # break
 
 
 if __name__ == "__main__":
