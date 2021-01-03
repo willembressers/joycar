@@ -1,14 +1,17 @@
 # Add your Python code here. E.g.
-import neopixel
 from microbit import *
+from neopixel import *
+import gc
+
+frequency = 40000
 
 # Initialization of the I2C interface
-i2c.init(freq=400000, sda=pin20, scl=pin19)
+i2c.init(freq=frequency, sda=pin20, scl=pin19)
 
 # ==============================================================================
 # LIGHTS
 # ==============================================================================
-np = neopixel.NeoPixel(pin0, 8)
+np = NeoPixel(pin0, 8)
 
 
 def alarm(nr_blinks, lights=(1, 2, 4, 7), delay=150, color=(100, 35, 0)):
@@ -85,23 +88,30 @@ def clockTicking(delay=100):
     display.show(Image.CLOCK12)
     sleep(delay)
     display.clear()
+    
+def show_distance(distance, max_distance=336, nr_rows=5):
+    y = int(distance / (max_distance / nr_rows))
+    print(y, distance)
+    
+    display.clear()
+    display.set_pixel(0, y, 9)
+    display.set_pixel(1, y, 9)
+    display.set_pixel(2, y, 9)
+    display.set_pixel(3, y, 9)
+    display.set_pixel(4, y, 9)
 
 
 # ==============================================================================
 # MOTORS
 # ==============================================================================
 
-# Initialisierung des PWM Controllers
 i2c.write(0x70, b'\x00\x01')
 i2c.write(0x70, b'\xE8\xAA')
 
 
-# Control motors using the PWM controller
-# PWM0 and PWM1 for the left and PWM2 and PWM3 for the right motor
 def drive(PWM0, PWM1, PWM2, PWM3):
-    i2c.write(0x70, b'\x02' + bytes([
-        PWM0]))  # Transfer value for PWM channel (0-255) to PWM controller. 0x70 is the I2C address of the controller. b'\x02 is the byte for PWM channel 1. To the byte for the channel the byte with the PWM value is added.
-    i2c.write(0x70, b'\x03' + bytes([PWM1]))  # Repeat the process for all 4 channels
+    i2c.write(0x70, b'\x02' + bytes([PWM0]))
+    i2c.write(0x70, b'\x03' + bytes([PWM1]))
     i2c.write(0x70, b'\x04' + bytes([PWM2]))
     i2c.write(0x70, b'\x05' + bytes([PWM3]))
 
@@ -114,12 +124,12 @@ def stop():
 # SENSOR DATA
 # ==============================================================================
 
-# Read out IO Expander data and store in sen_data
 def fetchSensorData():
     try:
         data = "{0:b}".format(ord(i2c.read(0x38, 1)))
         bol_data_dict = {}
         bit_count = 7
+        
         for i in data:
             if i == "0":
                 bol_data_dict[bit_count] = False
@@ -127,23 +137,70 @@ def fetchSensorData():
             else:
                 bol_data_dict[bit_count] = True
                 bit_count -= 1
-        return bol_data_dict  # bit 0 = SpeedLeft, bit 1 = SpeedRight, bit 2 = LineTrackerLeft, bit 3 = LineTrackerMiddle, bit 4 = LineTrackerRight, bit 5 = ObstclLeft, bit 6 = ObstclRight, bit 7 = Buzzer
+                
+        # bit 0 = SpeedLeft, 
+        # bit 1 = SpeedRight, 
+        # bit 2 = LineTrackerLeft, 
+        # bit 3 = LineTrackerMiddle, 
+        # bit 4 = LineTrackerRight, 
+        # bit 5 = ObstclLeft, 
+        # bit 6 = ObstclRight, 
+        # bit 7 = Buzzer
+        
+        return bol_data_dict  
 
     except OSError:
         print('skipping error')
+        
+    
+# ==============================================================================
+# SONAR
+# ==============================================================================
 
+DISTANCE_CM_PER_BIT = 0.21
+spi.init(baudrate=frequency, bits=8, mode=0, miso=pin12)
+
+def sonar_distance():
+    gc.disable()
+    pin8.write_digital(True)
+    pin8.write_digital(False)
+    x = spi.read(200)
+    high_bits = 0
+
+    for i in range(len(x)):
+        if x[i] == 0 and high_bits > 0:
+            break
+        elif x[i] == 0xff:
+            high_bits += 8
+        else:
+            high_bits += bin(x[i]).count('1')
+
+    x = None
+    gc.enable()
+    gc.collect()
+
+    return high_bits * DISTANCE_CM_PER_BIT
+    
+# ==============================================================================
+# SERVO
+# ==============================================================================
+
+# pin1.set_analog_period(10)
+
+# def scale(num, in_min, in_max, out_min, out_max):
+#    return(round((num-in_min)*(out_max-out_min)/(in_max-in_min)+out_min))
+    
+# def servo(x, y):
+#    if x == 1 and y >= 0 and y <= 180:
+#        pin1.write_analog(scale(y, 0, 180, 100, 200))
 
 # ==============================================================================
-# MAIN LOGIC
+# ACTIONS
 # ==============================================================================
 
-def brake(sensor_data, locked):
-    if not sensor_data[5] or not sensor_data[6]:
-        stop()
-        if locked == False:
-            breaklightsOn()
-    elif locked == False:
-        lightsOn()
+def brake(sensor_data):
+    stop()
+    breaklightsOn()
 
 
 def driveBackward(speed=254):
@@ -168,7 +225,7 @@ def TurnRight(speed=254):
 
 def welcome():
     alarm(nr_blinks=2)
-    display.show(Image.ARROW_S)
+    turnOn()
     lightsOn()
 
 
@@ -177,25 +234,26 @@ def goodbye():
     alarm(nr_blinks=2)
     clockTicking()
 
+# ==============================================================================
+# MAIN LOGIC
+# ==============================================================================
 
 def main():
-    locked = True
     while True:
         sensor_data = fetchSensorData()
-        if sensor_data is not None:
+        distance = sonar_distance()
+        if sensor_data is None:
+            continue
+        
+        show_distance(distance)
 
-            brake(sensor_data, locked)
+        if button_a.is_pressed():
+            welcome()
 
-            if button_a.is_pressed():
-                locked = False
-                welcome()
-                driveForward()
-
-            elif button_b.is_pressed():
-                locked = True
-                stop()
-                goodbye()
-                # break
+        elif button_b.is_pressed():
+            stop()
+            goodbye()
+            break
 
 
 if __name__ == "__main__":
